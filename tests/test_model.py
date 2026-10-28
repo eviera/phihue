@@ -1,4 +1,5 @@
 import tempfile
+import json
 import unittest
 from pathlib import Path
 from phihue.model import State
@@ -29,12 +30,29 @@ class StateTests(unittest.TestCase):
             state = State()
             state.selected = 3
             state.powered = False
+            state.language = 'en'
             state.current.name = 'Personalizado'
             state.current.brightness = 42
             state.current.set_linked(False)
             state.current.set_color(1, '#123abc')
             state.save(path)
             self.assertEqual(State.load(path), state)
+
+    def test_legacy_and_unknown_language_preserve_scenes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.json'
+            state = State()
+            state.current.name = 'Mi ambiente'
+            state.save(path)
+            data = json.loads(path.read_text())
+            del data['language']
+            for language in (None, 'unknown'):
+                if language is not None:
+                    data['language'] = language
+                path.write_text(json.dumps(data))
+                loaded = State.load(path)
+                self.assertEqual(loaded.language, 'es')
+                self.assertEqual(loaded.current.name, 'Mi ambiente')
 
     def test_invalid_saved_state(self):
         with tempfile.TemporaryDirectory() as directory:

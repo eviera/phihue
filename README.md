@@ -26,7 +26,9 @@ El selector de color aplica cada cambio en vivo, sin confirmar. El brillo común
 
 Cada cambio de color, brillo, nombre válido, ambiente seleccionado o encendido se escribe inmediatamente en `data/state.json`. Al abrir se recupera el último estado. Los esquemas antiguos se abren con colores independientes. No se muestra texto de guardado exitoso; los errores sí se avisan.
 
-Pendiente para una futura pantalla de setup: acción explícita para borrar la configuración de luces y restaurar defaults razonables. No implementar aún.
+El engranaje de la esquina superior derecha abre Configuración. El selector Español / English cambia el idioma al instante y lo guarda en el campo `language` del mismo `data/state.json`. Los archivos anteriores usan español por defecto. Los nombres de los ambientes se conservan tal como los escribiste.
+
+Desde Configuración también podés restaurar los valores iniciales: se pide confirmación antes de reemplazar los ajustes guardados por los cinco ambientes originales. Se conserva el idioma elegido. «Volver» regresa a los ambientes sin cambiar sus ajustes.
 
 ## Verificar
 

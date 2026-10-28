@@ -34,6 +34,7 @@ class State:
     schemes: list[Scheme] = field(default_factory=defaults)
     selected: int = 0
     powered: bool = True
+    language: str = 'es'
 
     @property
     def current(self):
@@ -61,4 +62,7 @@ class State:
             assert all(isinstance(c, str) and re.fullmatch(r'#[0-9a-fA-F]{6}', c) for c in scheme.colors)
             assert not scheme.linked or scheme.colors[0] == scheme.colors[1]
             schemes.append(scheme)
-        return cls(schemes, data['selected'], data['powered'])
+        language = data.get('language', 'es')
+        if language not in ('es', 'en'):
+            language = 'es'
+        return cls(schemes, data['selected'], data['powered'], language)

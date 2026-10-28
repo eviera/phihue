@@ -1,12 +1,38 @@
 import sys
 from pathlib import Path
-from PySide6.QtCore import Qt, QRectF, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QRectF, QTranslator, QLibraryInfo
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QFont, QPen
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout,
-    QHBoxLayout, QLabel, QPushButton, QLineEdit, QSlider, QColorDialog, QFrame)
+    QHBoxLayout, QLabel, QPushButton, QLineEdit, QSlider, QColorDialog, QFrame,
+    QStackedWidget, QMessageBox, QComboBox)
 from .model import State
+from .i18n import translate
 
 ROOT = Path(__file__).resolve().parent.parent
+
+class SettingsButton(QPushButton):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(42, 42)
+        self.setToolTip('Configuración')
+        self.setAccessibleName('Abrir configuración')
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor('#d3c4ff' if self.hasFocus() else '#363943'), 1))
+        p.setBrush(QColor('#30303b' if self.underMouse() else '#1d1e24'))
+        p.drawRoundedRect(QRectF(1, 1, 40, 40), 12, 12)
+        p.translate(21, 21)
+        p.setPen(QPen(QColor('#ddd1f6'), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QRectF(-7, -7, 14, 14))
+        for _ in range(8):
+            p.drawLine(0, -8, 0, -11)
+            p.rotate(45)
+        p.setPen(QPen(QColor('#ddd1f6'), 2))
+        p.drawEllipse(QRectF(-2.5, -2.5, 5, 5))
 
 class SchemeCard(QPushButton):
     def __init__(self, number):
@@ -88,6 +114,8 @@ STYLE = """
     QLabel#eyebrow { color: #aaa2ba; font-size: 11px; font-weight: 600; }
     QFrame#panel { background: #1d1e24; border: 1px solid #303038; border-radius: 20px; }
     QLineEdit { background: #25262e; border: 1px solid #3a3945; border-radius: 9px; padding: 10px 12px; }
+    QComboBox { background: #25262e; border: 1px solid #3a3945; border-radius: 9px; padding: 10px 12px; }
+    QComboBox QAbstractItemView { background: #25262e; selection-background-color: #514269; }
     QLineEdit:focus { border-color: #b9a0f5; }
     QPushButton { border-radius: 12px; padding: 12px; }
     QPushButton:focus { border: 1px solid #d3c4ff; }
@@ -100,6 +128,8 @@ class Window(QMainWindow):
     def __init__(self, path=ROOT / 'data' / 'state.json'):
         super().__init__()
         self.path = path
+        self.text_bindings = []
+        self.qt_translator = QTranslator(self)
         warning = ''
         try:
             self.state = State.load(path)
@@ -110,13 +140,15 @@ class Window(QMainWindow):
             warning = 'No se pudo leer el guardado. Se cargaron los valores iniciales.'
         for scheme in self.state.schemes:
             scheme.linked = False
-        self.setWindowTitle('PhiHue · Simulador')
+        self.bind(self.setWindowTitle, 'PhiHue · Simulador')
         self.resize(860, 650)
         self.setMinimumWidth(810)
         self.setStyleSheet(STYLE)
         container = QWidget()
         container.setObjectName('root')
-        self.setCentralWidget(container)
+        self.pages = QStackedWidget()
+        self.setCentralWidget(self.pages)
+        self.pages.addWidget(container)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(32, 28, 32, 22)
         layout.setSpacing(18)
@@ -126,11 +158,16 @@ class Window(QMainWindow):
         title.setFont(QFont('Helvetica', 26, QFont.Weight.Bold))
         header.addWidget(title)
         header.addStretch()
-        badge = QLabel('●  Simulación local')
+        badge = QLabel()
+        self.bind(badge.setText, '●  Simulación local')
         badge.setObjectName('muted')
         header.addWidget(badge)
+        self.settings_button = SettingsButton()
+        self.settings_button.clicked.connect(lambda: self.pages.setCurrentIndex(1))
+        header.addWidget(self.settings_button)
         layout.addLayout(header)
-        caption = QLabel('TUS AMBIENTES')
+        caption = QLabel()
+        self.bind(caption.setText, 'TUS AMBIENTES')
         caption.setObjectName('eyebrow')
         layout.addWidget(caption)
         row = QHBoxLayout()
@@ -148,13 +185,14 @@ class Window(QMainWindow):
         editor.setContentsMargins(24, 22, 24, 22)
         editor.setSpacing(20)
         name_row = QHBoxLayout()
-        label = QLabel('Personalizá tu ambiente')
+        label = QLabel()
+        self.bind(label.setText, 'Personalizá tu ambiente')
         label.setObjectName('sectionTitle')
         label.setFont(QFont('Helvetica', 15, QFont.Weight.Medium))
         name_row.addWidget(label)
         name_row.addStretch()
         self.name = QLineEdit()
-        self.name.setAccessibleName('Nombre del esquema')
+        self.bind(self.name.setAccessibleName, 'Nombre del esquema')
         self.name.setMaxLength(32)
         self.name.setFixedWidth(230)
         self.name.textEdited.connect(self.rename)
@@ -176,8 +214,8 @@ class Window(QMainWindow):
         for source, label in [(0, '1 → 2'), (1, '1 ← 2')]:
             button = QPushButton(label)
             button.setStyleSheet('background: #30303b; color: #ddd1f6; padding: 8px 18px;')
-            button.setToolTip(f'Copiar color del foco {source + 1} al foco {2 - source}')
-            button.setAccessibleName(button.toolTip())
+            self.bind(button.setToolTip, 'Copiar color del foco {source} al foco {target}', source=source + 1, target=2 - source)
+            self.bind(button.setAccessibleName, 'Copiar color del foco {source} al foco {target}', source=source + 1, target=2 - source)
             button.clicked.connect(lambda checked=False, index=source: self.copy_color(index))
             copy_row.addWidget(button)
         copy_row.addStretch()
@@ -188,7 +226,7 @@ class Window(QMainWindow):
         brightness_row.addWidget(self.brightness_label)
         self.brightness = QSlider(Qt.Orientation.Horizontal)
         self.brightness.setRange(0, 100)
-        self.brightness.setAccessibleName('Brillo común de los dos focos')
+        self.bind(self.brightness.setAccessibleName, 'Brillo común de los dos focos')
         self.brightness.valueChanged.connect(self.adjust_brightness)
         brightness_row.addWidget(self.brightness)
         editor.addLayout(brightness_row)
@@ -206,7 +244,132 @@ class Window(QMainWindow):
         self.status.setWordWrap(True)
         self.status.setVisible(bool(warning))
         layout.addWidget(self.status)
+        self.build_settings_page()
+        self.bind(self.settings_button.setToolTip, 'Configuración')
+        self.bind(self.settings_button.setAccessibleName, 'Abrir configuración')
+        self.bind(self.power.setAccessibleName, 'Encender o apagar ambos focos')
+        if warning:
+            self.bind(self.status.setText, warning)
+        self.apply_language()
+
+    def tr_text(self, text, **values):
+        return translate(self.state.language, text, **values)
+
+    def bind(self, setter, text, **values):
+        self.text_bindings.append((setter, text, values))
+        setter(self.tr_text(text, **values))
+
+    def apply_language(self):
+        app = QApplication.instance()
+        app.removeTranslator(self.qt_translator)
+        if self.state.language == 'es':
+            if self.qt_translator.load('qtbase_es', QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+                app.installTranslator(self.qt_translator)
+        for setter, text, values in self.text_bindings:
+            setter(self.tr_text(text, **values))
+        self.language_selector.blockSignals(True)
+        self.language_selector.setCurrentIndex(self.language_selector.findData(self.state.language))
+        self.language_selector.blockSignals(False)
         self.refresh()
+
+    def change_language(self):
+        previous = self.state.language
+        self.state.language = self.language_selector.currentData()
+        try:
+            self.state.save(self.path)
+        except OSError as error:
+            self.state.language = previous
+            self.apply_language()
+            QMessageBox.warning(self, self.tr_text('No se pudo guardar'), self.tr_text('No se pudo guardar: {error}', error=error))
+            return
+        self.apply_language()
+
+    def build_settings_page(self):
+        page = QWidget()
+        page.setObjectName('root')
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(32, 28, 32, 22)
+        layout.setSpacing(24)
+        header = QHBoxLayout()
+        self.back_button = QPushButton()
+        self.bind(self.back_button.setText, '← Volver')
+        self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.back_button.clicked.connect(lambda: self.pages.setCurrentIndex(0))
+        header.addWidget(self.back_button)
+        header.addStretch()
+        layout.addLayout(header)
+        title = QLabel()
+        self.bind(title.setText, 'Configuración')
+        title.setObjectName('brand')
+        layout.addWidget(title)
+        language_panel = QFrame()
+        language_panel.setObjectName('panel')
+        language_row = QHBoxLayout(language_panel)
+        language_row.setContentsMargins(24, 20, 24, 20)
+        language_label = QLabel()
+        language_label.setObjectName('sectionTitle')
+        self.bind(language_label.setText, 'Idioma')
+        language_row.addWidget(language_label)
+        language_row.addStretch()
+        self.language_selector = QComboBox()
+        self.language_selector.addItem('Español', 'es')
+        self.language_selector.addItem('English', 'en')
+        self.language_selector.setMinimumWidth(180)
+        self.bind(self.language_selector.setAccessibleName, 'Idioma')
+        language_label.setBuddy(self.language_selector)
+        self.language_selector.currentIndexChanged.connect(self.change_language)
+        language_row.addWidget(self.language_selector)
+        layout.addWidget(language_panel)
+        panel = QFrame()
+        panel.setObjectName('panel')
+        content = QVBoxLayout(panel)
+        content.setContentsMargins(24, 24, 24, 24)
+        content.setSpacing(16)
+        heading = QLabel()
+        self.bind(heading.setText, 'Restaurar valores iniciales')
+        heading.setObjectName('sectionTitle')
+        content.addWidget(heading)
+        description = QLabel()
+        self.bind(description.setText, 'Restaurá los cinco ambientes originales: nombres, colores, brillo y encendido. Se conserva el idioma elegido.')
+        description.setWordWrap(True)
+        description.setObjectName('muted')
+        content.addWidget(description)
+        self.reset_button = QPushButton()
+        self.bind(self.reset_button.setText, 'Restaurar valores iniciales')
+        self.reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_button.setStyleSheet('background: #422b36; color: #ffd0dc;')
+        self.reset_button.clicked.connect(self.reset_settings)
+        content.addWidget(self.reset_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(panel)
+        layout.addStretch()
+        self.pages.addWidget(page)
+
+    def reset_settings(self):
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(self.tr_text('Restaurar valores iniciales'))
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText(self.tr_text('¿Querés borrar tu configuración guardada?'))
+        dialog.setInformativeText(self.tr_text('Se perderán los nombres, colores y ajustes personalizados de todos los ambientes. Esta acción no se puede deshacer.'))
+        restore = dialog.addButton(self.tr_text('Restaurar'), QMessageBox.ButtonRole.DestructiveRole)
+        cancel = dialog.addButton(self.tr_text('Cancelar'), QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        dialog.exec()
+        if dialog.clickedButton() != restore:
+            return
+        state = State(language=self.state.language)
+        for scheme in state.schemes:
+            scheme.linked = False
+        try:
+            state.save(self.path)
+        except OSError as error:
+            QMessageBox.warning(self, self.tr_text('No se pudo restaurar'), self.tr_text('No se pudo guardar: {error}', error=error))
+            return
+        self.state = state
+        self.name.clearFocus()
+        self.refresh()
+        self.status.hide()
+        self.pages.setCurrentIndex(0)
 
     def refresh(self):
         s = self.state.current
@@ -225,13 +388,13 @@ class Window(QMainWindow):
         for i, button in enumerate(self.color_buttons):
             c = display_color(s.colors[i], s.brightness, self.state.powered)
             ink = '#10141d' if c.lightnessF() > 0.55 else '#ffffff'
-            button.setText(f'Foco {i+1}    ·    {s.colors[i].upper()}    ↗')
+            button.setText(self.tr_text('Foco {number}', number=i + 1) + f'    ·    {s.colors[i].upper()}    ↗')
             button.setStyleSheet(f'background: {c.name()}; color: {ink};')
-        self.brightness_label.setText(f'Brillo común · {s.brightness}%')
+        self.brightness_label.setText(self.tr_text('Brillo común · {value}%', value=s.brightness))
         self.power.blockSignals(True)
         self.power.setChecked(self.state.powered)
         self.power.blockSignals(False)
-        self.power.setToolTip('Apagar' if self.state.powered else 'Encender')
+        self.power.setToolTip(self.tr_text('Apagar' if self.state.powered else 'Encender'))
 
     def changed(self):
         self.refresh()
@@ -239,7 +402,7 @@ class Window(QMainWindow):
             self.state.save(self.path)
             self.status.hide()
         except OSError as error:
-            self.status.setText(f'No se pudo guardar: {error}')
+            self.status.setText(self.tr_text('No se pudo guardar: {error}', error=error))
             self.status.show()
 
     def select(self, index):
@@ -258,7 +421,7 @@ class Window(QMainWindow):
 
     def pick_color(self, index):
         dialog = QColorDialog(QColor(self.state.current.colors[index]), self)
-        dialog.setWindowTitle(f'Color del foco {index + 1}')
+        dialog.setWindowTitle(self.tr_text('Color del foco {number}', number=index + 1))
         dialog.setOption(QColorDialog.ColorDialogOption.NoButtons)
         dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
         def apply_color(color):
