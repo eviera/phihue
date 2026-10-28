@@ -4,9 +4,10 @@ from PySide6.QtCore import Qt, QRectF, QTranslator, QLibraryInfo
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QFont, QPen
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QLineEdit, QSlider, QColorDialog, QFrame,
-    QStackedWidget, QMessageBox, QComboBox)
+    QStackedWidget, QMessageBox, QComboBox, QScrollArea)
 from .model import State
 from .i18n import translate
+from .bridge_panel import BridgePanel
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -119,6 +120,11 @@ STYLE = """
     QLineEdit:focus { border-color: #b9a0f5; }
     QPushButton { border-radius: 12px; padding: 12px; }
     QPushButton:focus { border: 1px solid #d3c4ff; }
+    QScrollArea { background: #141519; }
+    QScrollBar:vertical { background: #141519; width: 10px; }
+    QScrollBar::handle:vertical { background: #45414f; border-radius: 5px; min-height: 28px; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: #141519; }
     QSlider::groove:horizontal { height: 6px; background: #3b3946; border-radius: 3px; }
     QSlider::sub-page:horizontal { background: #b9a0f5; border-radius: 3px; }
     QSlider::handle:horizontal { width: 18px; margin: -6px 0; background: #eee5ff; border-radius: 9px; }
@@ -140,7 +146,7 @@ class Window(QMainWindow):
             warning = 'No se pudo leer el guardado. Se cargaron los valores iniciales.'
         for scheme in self.state.schemes:
             scheme.linked = False
-        self.bind(self.setWindowTitle, 'PhiHue · Simulador')
+        self.setWindowTitle('PhiHue')
         self.resize(860, 650)
         self.setMinimumWidth(810)
         self.setStyleSheet(STYLE)
@@ -159,7 +165,7 @@ class Window(QMainWindow):
         header.addWidget(title)
         header.addStretch()
         badge = QLabel()
-        self.bind(badge.setText, '●  Simulación local')
+        self.badge = badge
         badge.setObjectName('muted')
         header.addWidget(badge)
         self.settings_button = SettingsButton()
@@ -270,6 +276,7 @@ class Window(QMainWindow):
         self.language_selector.blockSignals(True)
         self.language_selector.setCurrentIndex(self.language_selector.findData(self.state.language))
         self.language_selector.blockSignals(False)
+        self.bridge_panel.retranslate()
         self.refresh()
 
     def change_language(self):
@@ -320,6 +327,11 @@ class Window(QMainWindow):
         self.language_selector.currentIndexChanged.connect(self.change_language)
         language_row.addWidget(self.language_selector)
         layout.addWidget(language_panel)
+        self.bridge_panel = BridgePanel(self)
+        self.bridge_panel.mode_changed.connect(self.refresh)
+        self.bridge_panel.control_error.connect(self.show_bridge_error)
+        self.bridge_panel.control_success.connect(self.clear_bridge_error)
+        layout.addWidget(self.bridge_panel)
         panel = QFrame()
         panel.setObjectName('panel')
         content = QVBoxLayout(panel)
@@ -342,7 +354,11 @@ class Window(QMainWindow):
         content.addWidget(self.reset_button, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(panel)
         layout.addStretch()
-        self.pages.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        self.pages.addWidget(scroll)
 
     def reset_settings(self):
         dialog = QMessageBox(self)
@@ -357,7 +373,7 @@ class Window(QMainWindow):
         dialog.exec()
         if dialog.clickedButton() != restore:
             return
-        state = State(language=self.state.language)
+        state = State(language=self.state.language, bridge=self.state.bridge)
         for scheme in state.schemes:
             scheme.linked = False
         try:
@@ -370,8 +386,21 @@ class Window(QMainWindow):
         self.refresh()
         self.status.hide()
         self.pages.setCurrentIndex(0)
+        self.bridge_panel.schedule()
+
+    def show_bridge_error(self, message):
+        self.bridge_error_text = self.tr_text(message)
+        self.status.setText(self.bridge_error_text)
+        self.status.show()
+
+    def clear_bridge_error(self):
+        if self.status.text() == getattr(self, 'bridge_error_text', None):
+            self.status.hide()
 
     def refresh(self):
+        real = self.state.bridge.mode == 'real'
+        self.badge.setText(self.tr_text('●  Focos reales' if real else '●  Simulación local'))
+        self.setWindowTitle(self.tr_text('PhiHue · Focos reales' if real else 'PhiHue · Simulador'))
         s = self.state.current
         for i, button in enumerate(self.buttons):
             button.scheme = self.state.schemes[i]
@@ -396,7 +425,7 @@ class Window(QMainWindow):
         self.power.blockSignals(False)
         self.power.setToolTip(self.tr_text('Apagar' if self.state.powered else 'Encender'))
 
-    def changed(self):
+    def changed(self, control=True):
         self.refresh()
         try:
             self.state.save(self.path)
@@ -404,6 +433,8 @@ class Window(QMainWindow):
         except OSError as error:
             self.status.setText(self.tr_text('No se pudo guardar: {error}', error=error))
             self.status.show()
+        if control:
+            self.bridge_panel.schedule()
 
     def select(self, index):
         self.state.selected = index
@@ -413,7 +444,7 @@ class Window(QMainWindow):
         name = self.name.text().strip()
         if name:
             self.state.current.name = name
-        self.changed()
+        self.changed(control=False)
 
     def copy_color(self, source):
         self.state.current.set_color(1 - source, self.state.current.colors[source])

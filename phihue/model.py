@@ -1,8 +1,52 @@
-"""Estado local del simulador. No contiene acceso a red."""
+"""Shared scene, language and Bridge settings. No network access here."""
 from dataclasses import dataclass, field, asdict
 import json
 from pathlib import Path
 import re
+import os
+from uuid import UUID
+
+
+@dataclass
+class BridgeSettings:
+    address: str = ''
+    key: str = field(default='', repr=False)
+    fingerprint: str = ''
+    lights: list[dict] = field(default_factory=list)
+    selected: list[str] = field(default_factory=lambda: ['', ''])
+    mode: str = 'simulation'
+
+    @property
+    def ready(self):
+        available = {light['id'] for light in self.lights}
+        return bool(self.address and self.key and self.fingerprint
+                    and len(self.selected) == 2 and len(set(self.selected)) == 2
+                    and all(item in available for item in self.selected))
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            return cls()
+        try:
+            result = cls(**data)
+            if not all(isinstance(value, str) for value in (result.address, result.key, result.fingerprint)):
+                return cls()
+            if result.fingerprint and not re.fullmatch(r'[0-9a-f]{64}', result.fingerprint):
+                return cls()
+            if not isinstance(result.lights, list) or not isinstance(result.selected, list) or len(result.selected) != 2:
+                return cls()
+            for light in result.lights:
+                UUID(light['id'])
+                if not isinstance(light['name'], str):
+                    return cls()
+            for item in result.selected:
+                if item:
+                    UUID(item)
+            if result.mode != 'real' or not result.ready:
+                result.mode = 'simulation'
+            return result
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return cls()
 
 @dataclass
 class Scheme:
@@ -35,6 +79,7 @@ class State:
     selected: int = 0
     powered: bool = True
     language: str = 'es'
+    bridge: BridgeSettings = field(default_factory=BridgeSettings)
 
     @property
     def current(self):
@@ -44,7 +89,11 @@ class State:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding='utf-8')
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            if hasattr(os, 'fchmod'):
+                os.fchmod(stream.fileno(), 0o600)
+            stream.write(json.dumps(asdict(self), ensure_ascii=False, indent=2))
         temporary.replace(path)
 
     @classmethod
@@ -65,4 +114,5 @@ class State:
         language = data.get('language', 'es')
         if language not in ('es', 'en'):
             language = 'es'
-        return cls(schemes, data['selected'], data['powered'], language)
+        return cls(schemes, data['selected'], data['powered'], language,
+                   BridgeSettings.from_dict(data.get('bridge', {})))
