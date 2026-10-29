@@ -54,6 +54,8 @@ class Scheme:
     colors: list[str]
     linked: bool = True
     brightness: int = 75
+    brightnesses: list[float] | None = None
+    powers: list[bool] | None = None
 
     def set_color(self, index, color):
         if not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
@@ -110,6 +112,10 @@ class State:
             assert isinstance(scheme.colors, list) and len(scheme.colors) == 2
             assert all(isinstance(c, str) and re.fullmatch(r'#[0-9a-fA-F]{6}', c) for c in scheme.colors)
             assert not scheme.linked or scheme.colors[0] == scheme.colors[1]
+            if scheme.brightnesses is not None:
+                assert len(scheme.brightnesses) == 2 and all(type(v) in (int, float) and 0 <= v <= 100 for v in scheme.brightnesses)
+            if scheme.powers is not None:
+                assert len(scheme.powers) == 2 and all(type(v) is bool for v in scheme.powers)
             schemes.append(scheme)
         language = data.get('language', 'es')
         if language not in ('es', 'en'):

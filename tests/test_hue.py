@@ -437,3 +437,72 @@ class BridgeUITests(unittest.TestCase):
         self.assertTrue(self.window.buttons[3].isChecked())
         self.assertEqual(self.window.actual_button.scheme.colors, [light['color'] for light in snapshot])
         self.assertEqual(self.window.state.schemes, scenes)
+
+    def test_save_actual_to_named_slot_roundtrips_and_does_not_touch_lights(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        self.panel.pending = None
+        snapshot = [{'on': True, 'brightness': 24.5, 'color': '#ff0000'},
+                    {'on': False, 'brightness': 87, 'color': '#0011ff'}]
+        self.window.receive_actual(snapshot)
+        before = deepcopy(self.window.state.schemes)
+        with patch.object(HueClient, 'request') as request:
+            self.assertTrue(self.window.store_actual(2, 'Mi escena'))
+            request.assert_not_called()
+        saved = State.load(self.path)
+        self.assertEqual(saved.schemes[2].name, 'Mi escena')
+        self.assertEqual(saved.schemes[2].brightnesses, [24.5, 87])
+        self.assertEqual(saved.schemes[2].powers, [True, False])
+        self.assertEqual(saved.schemes[2].colors, ['#ff0000', '#0011ff'])
+        self.assertTrue(self.window.actual_view)
+        for i in (0, 1, 3, 4):
+            self.assertEqual(saved.schemes[i], before[i])
+        with patch.object(HueClient, 'apply') as apply, patch.object(HueClient, 'light_states', return_value=snapshot):
+            self.window.select(2)
+            self.panel.timer.stop()
+            self.panel.flush()
+            self.wait_idle()
+            self.assertEqual(apply.call_args.args[2:], ([24.5, 87], [True, False]))
+
+    def test_save_actual_failure_keeps_original_slot(self):
+        self.window.receive_actual([{'on': True, 'brightness': 50, 'color': '#ffffff'}] * 2)
+        before = deepcopy(self.window.state.schemes)
+        with patch.object(State, 'save', side_effect=OSError('disk error')), patch.object(QMessageBox, 'warning'):
+            self.assertFalse(self.window.store_actual(0, 'New'))
+        self.assertEqual(self.window.state.schemes, before)
+
+    def test_scene_edits_are_live_but_only_saved_explicitly(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        self.panel.pending = None
+        baseline = deepcopy(State.load(self.path).schemes)
+        self.window.actual_view = False
+        self.window.name.setText('Nueva escena')
+        self.window.rename()
+        self.window.draft_scene().set_color(0, '#123456')
+        with patch.object(HueClient, 'apply') as apply, patch.object(HueClient, 'light_states', return_value=[{'on': True, 'brightness': 44, 'color': '#123456'}] * 2):
+            self.window.adjust_brightness(44)
+            self.panel.timer.stop()
+            self.panel.flush()
+            self.wait_idle()
+            self.assertEqual(apply.call_args.args[1][0], '#123456')
+            self.assertEqual(apply.call_args.args[2], 44)
+        self.assertEqual(State.load(self.path).schemes, baseline)
+        self.window.language_selector.setCurrentIndex(0)
+        self.assertEqual(State.load(self.path).schemes, baseline)
+        self.assertTrue(self.window.save_scene())
+        saved = State.load(self.path).current
+        self.assertEqual(saved.name, 'Nueva escena')
+        self.assertEqual(saved.colors[0], '#123456')
+        self.assertEqual(saved.brightness, 44)
+        self.assertNotIn(self.window.state.selected, self.window.scene_drafts)
+
+    def test_scene_save_failure_retains_draft_and_original(self):
+        baseline = deepcopy(self.window.state.current)
+        self.window.name.setText('Draft')
+        self.window.rename()
+        with patch.object(State, 'save', side_effect=OSError('disk error')), patch.object(QMessageBox, 'warning'):
+            self.assertFalse(self.window.save_scene())
+        self.assertEqual(self.window.state.current, baseline)
+        self.assertEqual(self.window.editing_scene.name, 'Draft')
+        self.assertEqual(State.load(self.path).current, baseline)

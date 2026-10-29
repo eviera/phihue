@@ -148,13 +148,15 @@ class HueClient:
     def apply(self, light_ids, colors, brightness, powered):
         if len(light_ids) != 2 or len(set(light_ids)) != 2:
             raise HueError('Elegí dos focos distintos.')
-        for light_id, color in zip(light_ids, colors):
+        for index, (light_id, color) in enumerate(zip(light_ids, colors)):
             light_id = str(UUID(light_id))
-            on = powered and brightness > 0 and color.lower() != '#000000'
+            level = brightness[index] if isinstance(brightness, list) else brightness
+            power = powered[index] if isinstance(powered, list) else powered
+            on = power and level > 0 and color.lower() != '#000000'
             payload = {'on': {'on': on}}
             if on:
                 x, y = rgb_to_xy(color)
-                payload.update(dimming={'brightness': float(brightness)}, color={'xy': {'x': x, 'y': y}})
+                payload.update(dimming={'brightness': float(level)}, color={'xy': {'x': x, 'y': y}})
             self.request('PUT', '/clip/v2/resource/light/' + light_id, payload)
 
 

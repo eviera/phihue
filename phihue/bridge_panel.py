@@ -383,8 +383,10 @@ class BridgePanel(QFrame):
             return
         state = self.window.state
         client = self.client()
-        ids, colors = list(self.settings.selected), list(state.current.colors)
-        brightness, powered = state.current.brightness, state.powered
+        scene = self.window.editing_scene
+        ids, colors = list(self.settings.selected), list(scene.colors)
+        brightness = deepcopy(scene.brightnesses) or scene.brightness
+        powered = deepcopy(scene.powers) if scene.powers is not None else state.powered
         self.pending = None
         def apply_and_read():
             client.apply(ids, colors, brightness, powered)

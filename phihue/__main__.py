@@ -1,10 +1,11 @@
 import sys
+from copy import deepcopy
 from pathlib import Path
-from PySide6.QtCore import Qt, QRectF, QTranslator, QLibraryInfo
+from PySide6.QtCore import Qt, QRectF, QTranslator, QLibraryInfo, QEvent, QTimer
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QFont, QPen
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QLineEdit, QSlider, QColorDialog, QFrame,
-    QStackedWidget, QMessageBox, QComboBox, QScrollArea, QGraphicsColorizeEffect)
+    QStackedWidget, QMessageBox, QComboBox, QScrollArea, QGraphicsColorizeEffect, QDialog, QDialogButtonBox)
 from .model import State, Scheme
 from .i18n import translate
 from .bridge_panel import BridgePanel
@@ -36,6 +37,25 @@ class SettingsButton(QPushButton):
         p.setPen(QPen(QColor('#ddd1f6'), 2))
         p.drawEllipse(QRectF(-2.5, -2.5, 5, 5))
 
+class SaveButton(QPushButton):
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(32, 32)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor('#d3c4ff'), 0.75))
+        p.setBrush(QColor('#30303b' if self.underMouse() else '#1d1e24'))
+        p.drawRoundedRect(QRectF(1, 1, 30, 30), 9, 9)
+        p.setPen(QPen(QColor('#ddd1f6'), 1.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(8, 7, 16, 18), 1, 1)
+        p.drawRect(QRectF(11, 7, 9, 6))
+        p.drawRect(QRectF(11, 18, 10, 7))
+
+
 class SchemeCard(QPushButton):
     def __init__(self, number):
         super().__init__()
@@ -65,7 +85,7 @@ class SchemeCard(QPushButton):
             # Two small lamp silhouettes, each using its exact stored RGB.
             p.setPen(Qt.PenStyle.NoPen)
             actual = getattr(self, 'actual_lights', None)
-            p.setBrush(display_color(color, actual[index]['brightness'] if actual else self.scheme.brightness, actual[index]['on'] if actual else self.powered))
+            p.setBrush(display_color(color, actual[index]['brightness'] if actual else self.scheme.brightnesses[index] if self.scheme.brightnesses else self.scheme.brightness, actual[index]['on'] if actual else self.scheme.powers[index] if self.scheme.powers else self.powered))
             p.drawRoundedRect(QRectF(x - 13, 53, 26, 30), 10, 10)
             p.setBrush(QColor('#b8b8c4'))
             p.drawRoundedRect(QRectF(x - 7, 86, 14, 4), 2, 2)
@@ -135,6 +155,7 @@ STYLE = """
 class Window(QMainWindow):
     def __init__(self, path=ROOT / 'data' / 'state.json'):
         super().__init__()
+        self.scene_drafts = {}
         self.actual = None
         self.actual_view = True
         self.path = path
@@ -155,6 +176,8 @@ class Window(QMainWindow):
         self.setStyleSheet(STYLE)
         container = QWidget()
         container.setObjectName('root')
+        self.main_page = container
+        container.installEventFilter(self)
         self.pages = QStackedWidget()
         self.setCentralWidget(self.pages)
         self.pages.addWidget(container)
@@ -228,6 +251,11 @@ class Window(QMainWindow):
         self.name.setFixedSize(230, 40)
         self.name.textEdited.connect(self.rename)
         name_row.addWidget(self.name)
+        self.save_scene_button = SaveButton()
+        self.bind(self.save_scene_button.setToolTip, 'Guardar ambiente')
+        self.bind(self.save_scene_button.setAccessibleName, 'Guardar ambiente')
+        self.save_scene_button.clicked.connect(self.save_scene)
+        name_row.addWidget(self.save_scene_button)
         editor.addLayout(name_row)
         colors = QHBoxLayout()
         colors.setSpacing(14)
@@ -272,7 +300,15 @@ class Window(QMainWindow):
         title.setFont(QFont('Helvetica', 15, QFont.Weight.Medium))
         title.setFixedHeight(40)
         self.bind(title.setText, 'Personalizá tu ambiente')
-        actual_layout.addWidget(title)
+        actual_header = QHBoxLayout()
+        actual_header.addWidget(title)
+        actual_header.addStretch()
+        self.save_actual_button = SaveButton()
+        self.bind(self.save_actual_button.setToolTip, 'Guardar en un ambiente')
+        self.bind(self.save_actual_button.setAccessibleName, 'Guardar en un ambiente')
+        self.save_actual_button.clicked.connect(self.save_actual_dialog)
+        actual_header.addWidget(self.save_actual_button)
+        actual_layout.addLayout(actual_header)
         self.actual_labels = []
         self.actual_sliders = []
         actual_columns = QHBoxLayout()
@@ -306,7 +342,6 @@ class Window(QMainWindow):
         self.status.setWordWrap(True)
         self.status.setVisible(bool(warning))
         layout.addWidget(self.status)
-        layout.addStretch()
         self.build_settings_page()
         self.bind(self.settings_button.setToolTip, 'Configuración')
         self.bind(self.settings_button.setAccessibleName, 'Abrir configuración')
@@ -315,21 +350,18 @@ class Window(QMainWindow):
             self.bind(self.status.setText, warning)
         self.apply_language()
         self.ensurePolished()
-        # Reserve the larger editor plus connection/error messages once, so
-        # changing screens or receiving Bridge data never grows the window.
-        status_visible = not self.status.isHidden()
-        self.status.show()
-        self.connection_notice.show()
-        sizes = []
-        for actual in (False, True):
-            self.scene_editor.setVisible(not actual)
-            self.actual_panel.setVisible(actual)
-            container.layout().invalidate()
-            sizes.append(container.sizeHint())
-        self.setFixedSize(max(980, *(size.width() for size in sizes)),
-                          max(size.height() for size in sizes) + 24)
-        self.status.setVisible(status_visible)
         self.refresh()
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, 'main_page', None) and event.type() == QEvent.Type.LayoutRequest:
+            QTimer.singleShot(0, self.fit_window)
+        return super().eventFilter(obj, event)
+
+    def fit_window(self):
+        self.controls.updateGeometry()
+        height = max(self.main_page.sizeHint().height(), self.main_page.minimumSizeHint().height())
+        if self.height() != height or self.width() != 980:
+            self.setFixedSize(980, height)
 
     def tr_text(self, text, **values):
         return translate(self.state.language, text, **values)
@@ -455,6 +487,7 @@ class Window(QMainWindow):
             QMessageBox.warning(self, self.tr_text('No se pudo restaurar'), self.tr_text('No se pudo guardar: {error}', error=error))
             return
         self.state = state
+        self.scene_drafts.clear()
         self.name.clearFocus()
         self.refresh()
         self.status.hide()
@@ -469,6 +502,86 @@ class Window(QMainWindow):
     def clear_bridge_error(self):
         if self.status.text() == getattr(self, 'bridge_error_text', None):
             self.status.hide()
+
+    def light_name(self, index):
+        selected = self.state.bridge.selected[index]
+        name = next((light['name'] for light in self.state.bridge.lights if light['id'] == selected),
+                    self.tr_text('Foco {number}', number=index + 1))
+        return self.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 170)
+
+    def save_actual_dialog(self):
+        if not self.actual:
+            return
+        dialog = QDialog(self)
+        dialog.setObjectName('root')
+        dialog.setWindowTitle(self.tr_text('Guardar en un ambiente'))
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(self.tr_text('Elegí el ambiente que querés reemplazar y su nombre.')))
+        slots = QComboBox()
+        for i, scene in enumerate(self.state.schemes):
+            slots.addItem(f'{i + 1} · {scene.name}', i)
+        slots.setCurrentIndex(self.state.selected)
+        layout.addWidget(slots)
+        name = QLineEdit(self.state.current.name)
+        name.setMaxLength(32)
+        layout.addWidget(name)
+        slots.currentIndexChanged.connect(lambda i: name.setText(self.state.schemes[i].name))
+        buttons = QDialogButtonBox()
+        save = buttons.addButton(self.tr_text('Guardar'), QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(self.tr_text('Cancelar'), QDialogButtonBox.ButtonRole.RejectRole)
+        name.textChanged.connect(lambda text: save.setEnabled(bool(text.strip())))
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.store_actual(slots.currentIndex(), name.text().strip())
+
+    def store_actual(self, slot, name):
+        if not self.actual or not name or len(name) > 32:
+            return False
+        previous = self.state.schemes[slot]
+        snapshot = deepcopy(self.actual)
+        self.state.schemes[slot] = Scheme(name, [v['color'] for v in snapshot], False,
+            round(sum(v['brightness'] for v in snapshot) / 2),
+            [v['brightness'] for v in snapshot], [v['on'] for v in snapshot])
+        try:
+            self.state.save(self.path)
+        except OSError as error:
+            self.state.schemes[slot] = previous
+            QMessageBox.warning(self, self.tr_text('No se pudo guardar'), self.tr_text('No se pudo guardar: {error}', error=error))
+            return False
+        self.scene_drafts.pop(slot, None)
+        self.status.setText(self.tr_text('Ambiente guardado.'))
+        self.status.show()
+        self.refresh()
+        return True
+
+    @property
+    def editing_scene(self):
+        return self.scene_drafts.get(self.state.selected, self.state.current)
+
+    def draft_scene(self):
+        return self.scene_drafts.setdefault(self.state.selected, deepcopy(self.state.current))
+
+    def save_scene(self):
+        slot = self.state.selected
+        scene = deepcopy(self.editing_scene)
+        scene.name = self.name.text().strip()
+        if not scene.name:
+            return False
+        previous = self.state.schemes[slot]
+        self.state.schemes[slot] = scene
+        try:
+            self.state.save(self.path)
+        except OSError as error:
+            self.state.schemes[slot] = previous
+            QMessageBox.warning(self, self.tr_text('No se pudo guardar'), self.tr_text('No se pudo guardar: {error}', error=error))
+            return False
+        self.scene_drafts.pop(slot, None)
+        self.status.setText(self.tr_text('Ambiente guardado.'))
+        self.status.show()
+        self.refresh()
+        return True
 
     def receive_actual(self, lights, select=True):
         self.actual = lights
@@ -487,7 +600,9 @@ class Window(QMainWindow):
         self.badge.setText('' if real else self.tr_text('●  Sin conexión'))
         self.badge.setVisible(not real)
         self.setWindowTitle('PhiHue')
-        s = self.state.current
+        self.save_actual_button.setEnabled(bool(self.actual))
+        s = self.editing_scene
+        self.save_scene_button.setEnabled(bool(s.name.strip()))
         self.scene_editor.setVisible(not self.actual_view)
         self.actual_panel.setVisible(self.actual_view)
         self.actual_button.scheme = Scheme(self.tr_text('Actual'),
@@ -505,13 +620,13 @@ class Window(QMainWindow):
                 color = display_color(light['color'], light['brightness'], light['on'])
                 ink = '#10141d' if color.lightnessF() > .55 else '#ffffff'
                 label.setStyleSheet(f'background: {color.name()}; color: {ink}; border-radius: 12px; padding: 12px;')
-                label.setText(self.tr_text('Foco {number}', number=i + 1) + '  ·  ' +
+                label.setText(self.light_name(i) + '  ·  ' +
                     self.tr_text('Encendido' if light['on'] else 'Apagado') +
                     f"  ·  {light['brightness']:.0f}%  ·  ≈ {light['color'].upper()}")
             else:
                 label.setText(self.tr_text('Esperando lectura del Bridge…'))
         for i, button in enumerate(self.buttons):
-            button.scheme = self.state.schemes[i]
+            button.scheme = self.scene_drafts.get(i, self.state.schemes[i])
             button.powered = self.state.powered
             button.setAccessibleName(button.scheme.name)
             button.setToolTip(button.scheme.name)
@@ -524,15 +639,24 @@ class Window(QMainWindow):
         self.brightness.blockSignals(False)
         for i, button in enumerate(self.color_buttons):
             observed = getattr(self, 'observed_power', None)
-            c = display_color(s.colors[i], s.brightness, observed[i] if observed else self.state.powered)
+            c = display_color(s.colors[i], s.brightnesses[i] if s.brightnesses else s.brightness, observed[i] if observed else s.powers[i] if s.powers else self.state.powered)
             ink = '#10141d' if c.lightnessF() > 0.55 else '#ffffff'
-            button.setText(self.tr_text('Foco {number}', number=i + 1) + f'    ·    {s.colors[i].upper()}    ↗')
+            button.setText(self.light_name(i) + f'    ·    {s.colors[i].upper()}    ↗')
             button.setStyleSheet(f'background: {c.name()}; color: {ink};')
-        self.brightness_label.setText(self.tr_text('Brillo común · {value}%', value=s.brightness))
+        self.brightness_label.setText(
+            self.tr_text('Brillos · {first}% / {second}%', first=round(s.brightnesses[0]), second=round(s.brightnesses[1]))
+            if s.brightnesses and s.brightnesses[0] != s.brightnesses[1] else
+            self.tr_text('Brillo común · {value}%', value=s.brightness))
         self.power.blockSignals(True)
         self.power.setChecked(self.state.powered)
         self.power.blockSignals(False)
         self.power.setToolTip(self.tr_text('Apagar' if self.state.powered else 'Encender'))
+        self.ensurePolished()
+        self.controls.layout().invalidate()
+        self.controls.layout().activate()
+        self.controls.updateGeometry()
+        self.main_page.layout().invalidate()
+        self.fit_window()
 
     def changed(self, control=True):
         if control:
@@ -540,7 +664,11 @@ class Window(QMainWindow):
         self.refresh()
         try:
             self.state.save(self.path)
-            self.status.hide()
+            if self.editing_scene != self.state.current:
+                self.status.setText(self.tr_text('Cambios sin guardar. Pulsá el disquete para guardar el ambiente.'))
+                self.status.show()
+            else:
+                self.status.hide()
         except OSError as error:
             self.status.setText(self.tr_text('No se pudo guardar: {error}', error=error))
             self.status.show()
@@ -550,16 +678,17 @@ class Window(QMainWindow):
     def select(self, index):
         self.actual_view = False
         self.state.selected = index
+        if self.editing_scene.powers is not None:
+            self.state.powered = any(self.editing_scene.powers)
         self.changed()
 
     def rename(self, text=None):
         name = self.name.text().strip()
-        if name:
-            self.state.current.name = name
+        self.draft_scene().name = name
         self.changed(control=False)
 
     def copy_color(self, source):
-        self.state.current.set_color(1 - source, self.state.current.colors[source])
+        self.draft_scene().set_color(1 - source, self.editing_scene.colors[source])
         self.changed()
 
     def edit_actual(self, index, **values):
@@ -583,18 +712,19 @@ class Window(QMainWindow):
         dialog.exec()
 
     def pick_color(self, index):
-        dialog = QColorDialog(QColor(self.state.current.colors[index]), self)
+        dialog = QColorDialog(QColor(self.editing_scene.colors[index]), self)
         dialog.setWindowTitle(self.tr_text('Color del foco {number}', number=index + 1))
         dialog.setOption(QColorDialog.ColorDialogOption.NoButtons)
         dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
         def apply_color(color):
-            self.state.current.set_color(index, color.name())
+            self.draft_scene().set_color(index, color.name())
             self.changed()
         dialog.currentColorChanged.connect(apply_color)
         dialog.exec()
 
     def adjust_brightness(self, value):
-        self.state.current.brightness = value
+        self.draft_scene().brightnesses = None
+        self.draft_scene().brightness = value
         self.changed()
 
     def toggle_power(self):
@@ -602,6 +732,7 @@ class Window(QMainWindow):
             self.bridge_panel.toggle_actual_power()
             self.refresh()
             return
+        self.draft_scene().powers = None
         self.state.powered = not self.state.powered
         self.changed()
 

@@ -1,6 +1,14 @@
 """Interface translations. Scheme names remain user-owned data."""
 
 ENGLISH = {
+    'Guardar ambiente': 'Save scene',
+    'Cambios sin guardar. Pulsá el disquete para guardar el ambiente.': 'Unsaved changes. Click the disk to save the scene.',
+    'Brillos · {first}% / {second}%': 'Brightness · {first}% / {second}%',
+    'Guardar en un ambiente': 'Save to a scene',
+    'Elegí el ambiente que querés reemplazar y su nombre.': 'Choose the scene to replace and its name.',
+    'Guardar': 'Save',
+    'Ambiente guardado.': 'Scene saved.',
+
     'Editá las luces sin cambiar tus ambientes guardados. Pulsá Actual para consultar de nuevo el Bridge.': 'Edit your lights without changing saved scenes. Click Current to read the Bridge again.',
     'Brillo del foco {number}': 'Light {number} brightness',
     'Cambios aplicados a las luces.': 'Changes applied to the lights.',

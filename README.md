@@ -24,7 +24,7 @@ Cinco tarjetas seleccionan ambientes con dos colores independientes. Los botones
 
 El selector de color aplica cada cambio en vivo, sin confirmar. El brillo común se refleja en ambas luces y muestras de color. El botón circular de encendido controla ambos focos simulados.
 
-Cada cambio de color, brillo, nombre válido, ambiente seleccionado o encendido se escribe inmediatamente en `data/state.json`. Al abrir se recupera el último estado. Los esquemas antiguos se abren con colores independientes. No se muestra texto de guardado exitoso; los errores sí se avisan.
+Los cambios de color y brillo se envían inmediatamente a los focos. Para conservar el nombre y los ajustes de una escena en `data/state.json`, pulsá el disquete a la derecha de su nombre. Los cambios pendientes se mantienen en memoria al cambiar de escena, pero se pierden al cerrar sin guardar; modificar la configuración no los guarda. Se muestra un aviso de cambios pendientes y una confirmación al guardar.
 
 El engranaje de la esquina superior derecha abre Configuración. El selector Español / English cambia el idioma al instante y lo guarda en el campo `language` del mismo `data/state.json`. Los archivos anteriores usan español por defecto. Los nombres de los ambientes se conservan tal como los escribiste.
 
@@ -35,6 +35,10 @@ Desde Configuración también podés restaurar los valores iniciales: se pide co
 La tarjeta **Actual**, antes de los cinco ambientes, consulta el Bridge sin modificar las luces. Muestra encendido, brillo individual y una aproximación RGB del color informado por cada foco. Se selecciona al iniciar y al regresar de Configuración. Sus valores son una lectura puntual: pulsá Actual para actualizar cambios realizados desde otra app.
 
 En Actual podés pulsar el color de cada foco para editarlo, ajustar su brillo con el deslizador individual debajo de cada botón. Los dos focos se muestran lado a lado, sin botones de copiar. Se envían solo los parámetros modificados y se agrupan los cambios rápidos. Esta vista no modifica los ambientes guardados. El botón de encendido envía solo encendido/apagado, conservando colores y brillos; si hay un foco encendido, permite apagar ambos. Elegir una de las cinco escenas vuelve a sus controles habituales y aplica sus ajustes.
+
+El icono de disquete de Actual permite reemplazar uno de los cinco slots y renombrarlo. Guarda colores, brillo y encendido individual en el mismo JSON; no envía comandos al Bridge. Los slots anteriores siguen funcionando. Al mover el brillo común de un slot, se vuelve a usar ese mismo brillo para ambos focos.
+
+Los botones muestran los nombres informados por el Bridge. La ventana ajusta su altura al contenido de la vista y no admite redimensionado manual.
 
 ## Conectar un Hue Bridge
 
