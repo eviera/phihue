@@ -85,6 +85,8 @@ class HueClient:
                 return key, fingerprint
             if not isinstance(data, dict) or not isinstance(data.get('data'), list):
                 raise ValueError()
+            if any(error.get('error_code') == 'communication_error' for error in data.get('errors', [])):
+                raise HueError('El Bridge está conectado, pero un foco no responde. Revisá su alimentación y conexión en la app Hue; luego reintentá el cambio.')
             if data.get('errors'):
                 raise HueError('El Bridge rechazó la solicitud. Actualizá los focos e intentá de nuevo.')
             return data['data']
@@ -116,6 +118,33 @@ class HueClient:
             raise HueError('El Bridge devolvió una respuesta inesperada.') from None
         return result
 
+    def light_states(self, light_ids):
+        lights = self.request('GET', '/clip/v2/resource/light')
+        try:
+            by_id = {light['id']: light for light in lights}
+            result = []
+            for light_id in light_ids:
+                light = by_id[light_id]
+                on = light['on']['on']
+                brightness = light['dimming']['brightness']
+                xy = light['color']['xy']
+                if type(on) is not bool or not 0 <= brightness <= 100:
+                    raise ValueError()
+                result.append({'on': on, 'brightness': brightness,
+                               'color': xy_to_rgb(xy['x'], xy['y'])})
+            if len(result) != 2:
+                raise ValueError()
+            return result
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            raise HueError('No se pudo consultar el estado de los dos focos. Actualizá los focos en Configuración.') from None
+
+    def power_states(self, light_ids):
+        return [light['on'] for light in self.light_states(light_ids)]
+
+    def set_power(self, light_ids, powered):
+        for light_id in light_ids:
+            self.request('PUT', '/clip/v2/resource/light/' + str(UUID(light_id)), {'on': {'on': powered}})
+
     def apply(self, light_ids, colors, brightness, powered):
         if len(light_ids) != 2 or len(set(light_ids)) != 2:
             raise HueError('Elegí dos focos distintos.')
@@ -137,3 +166,17 @@ def rgb_to_xy(color):
     z = r * .000088 + g * .072310 + b * .986039
     total = x + y + z
     return (x / total, y / total) if total else (0, 0)
+
+
+def xy_to_rgb(x, y):
+    """Approximate a Hue xy chromaticity at full brightness for display."""
+    if not (0 <= x <= 1 and 0 < y <= 1 and x + y <= 1.00001):
+        raise ValueError('Invalid xy')
+    X, Y, Z = x / y, 1.0, (1 - x - y) / y
+    values = [max(0, X * 1.656492 - Y * .354851 - Z * .255038),
+              max(0, -X * .707196 + Y * 1.655397 + Z * .036152),
+              max(0, X * .051713 - Y * .121364 + Z * 1.011530)]
+    scale = max(1, *values)
+    values = [v / scale for v in values]
+    values = [12.92 * v if v <= .0031308 else 1.055 * v ** (1 / 2.4) - .055 for v in values]
+    return '#' + ''.join(f'{round(min(1, max(0, v)) * 255):02x}' for v in values)

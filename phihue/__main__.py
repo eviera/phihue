@@ -4,8 +4,8 @@ from PySide6.QtCore import Qt, QRectF, QTranslator, QLibraryInfo
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QFont, QPen
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QLineEdit, QSlider, QColorDialog, QFrame,
-    QStackedWidget, QMessageBox, QComboBox, QScrollArea)
-from .model import State
+    QStackedWidget, QMessageBox, QComboBox, QScrollArea, QGraphicsColorizeEffect)
+from .model import State, Scheme
 from .i18n import translate
 from .bridge_panel import BridgePanel
 
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 class SettingsButton(QPushButton):
     def __init__(self):
         super().__init__()
-        self.setFixedSize(42, 42)
+        self.setFixedSize(32, 32)
         self.setToolTip('Configuración')
         self.setAccessibleName('Abrir configuración')
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -22,6 +22,7 @@ class SettingsButton(QPushButton):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.scale(0.75, 0.75)
         p.setPen(QPen(QColor('#d3c4ff' if self.hasFocus() else '#363943'), 1))
         p.setBrush(QColor('#30303b' if self.underMouse() else '#1d1e24'))
         p.drawRoundedRect(QRectF(1, 1, 40, 40), 12, 12)
@@ -63,7 +64,8 @@ class SchemeCard(QPushButton):
             x = self.width() / 2 - 24 + index * 48
             # Two small lamp silhouettes, each using its exact stored RGB.
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(display_color(color, self.scheme.brightness, self.powered))
+            actual = getattr(self, 'actual_lights', None)
+            p.setBrush(display_color(color, actual[index]['brightness'] if actual else self.scheme.brightness, actual[index]['on'] if actual else self.powered))
             p.drawRoundedRect(QRectF(x - 13, 53, 26, 30), 10, 10)
             p.setBrush(QColor('#b8b8c4'))
             p.drawRoundedRect(QRectF(x - 7, 86, 14, 4), 2, 2)
@@ -133,6 +135,8 @@ STYLE = """
 class Window(QMainWindow):
     def __init__(self, path=ROOT / 'data' / 'state.json'):
         super().__init__()
+        self.actual = None
+        self.actual_view = True
         self.path = path
         self.text_bindings = []
         self.qt_translator = QTranslator(self)
@@ -147,8 +151,7 @@ class Window(QMainWindow):
         for scheme in self.state.schemes:
             scheme.linked = False
         self.setWindowTitle('PhiHue')
-        self.resize(860, 650)
-        self.setMinimumWidth(810)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, False)
         self.setStyleSheet(STYLE)
         container = QWidget()
         container.setObjectName('root')
@@ -172,12 +175,31 @@ class Window(QMainWindow):
         self.settings_button.clicked.connect(lambda: self.pages.setCurrentIndex(1))
         header.addWidget(self.settings_button)
         layout.addLayout(header)
+        self.connection_notice = QLabel()
+        self.connection_notice.setWordWrap(True)
+        layout.addWidget(self.connection_notice)
+        self.controls = QWidget()
+        layout.addWidget(self.controls)
+        layout = QVBoxLayout(self.controls)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.disabled_effect = QGraphicsColorizeEffect(self.controls)
+        self.disabled_effect.setColor(QColor('#202020'))
+        self.disabled_effect.setStrength(1)
+        self.controls.setGraphicsEffect(self.disabled_effect)
         caption = QLabel()
         self.bind(caption.setText, 'TUS AMBIENTES')
         caption.setObjectName('eyebrow')
         layout.addWidget(caption)
         row = QHBoxLayout()
         row.setSpacing(12)
+        self.actual_button = SchemeCard(0)
+        self.actual_button.clicked.connect(lambda: self.bridge_panel.return_to_controls())
+        self.bind(self.actual_button.setToolTip, 'Consultar el estado actual sin modificar las luces')
+        row.addWidget(self.actual_button, 1)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setStyleSheet('color: #4b435c;')
+        row.addWidget(separator)
         self.buttons = []
         for i in range(5):
             button = SchemeCard(i + 1)
@@ -186,21 +208,24 @@ class Window(QMainWindow):
             self.buttons.append(button)
         layout.addLayout(row)
         panel = QFrame()
+        self.scene_editor = panel
         panel.setObjectName('panel')
         editor = QVBoxLayout(panel)
         editor.setContentsMargins(24, 22, 24, 22)
         editor.setSpacing(20)
         name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
         label = QLabel()
         self.bind(label.setText, 'Personalizá tu ambiente')
         label.setObjectName('sectionTitle')
         label.setFont(QFont('Helvetica', 15, QFont.Weight.Medium))
+        label.setFixedHeight(40)
         name_row.addWidget(label)
         name_row.addStretch()
         self.name = QLineEdit()
         self.bind(self.name.setAccessibleName, 'Nombre del esquema')
         self.name.setMaxLength(32)
-        self.name.setFixedWidth(230)
+        self.name.setFixedSize(230, 40)
         self.name.textEdited.connect(self.rename)
         name_row.addWidget(self.name)
         editor.addLayout(name_row)
@@ -237,6 +262,38 @@ class Window(QMainWindow):
         brightness_row.addWidget(self.brightness)
         editor.addLayout(brightness_row)
         layout.addWidget(panel)
+        self.actual_panel = QFrame()
+        self.actual_panel.setObjectName('panel')
+        actual_layout = QVBoxLayout(self.actual_panel)
+        actual_layout.setContentsMargins(24, 22, 24, 22)
+        actual_layout.setSpacing(20)
+        title = QLabel()
+        title.setObjectName('sectionTitle')
+        title.setFont(QFont('Helvetica', 15, QFont.Weight.Medium))
+        title.setFixedHeight(40)
+        self.bind(title.setText, 'Personalizá tu ambiente')
+        actual_layout.addWidget(title)
+        self.actual_labels = []
+        self.actual_sliders = []
+        actual_columns = QHBoxLayout()
+        actual_columns.setSpacing(14)
+        for index in range(2):
+            column = QVBoxLayout()
+            column.setSpacing(16)
+            label = QPushButton()
+            label.clicked.connect(lambda checked=False, i=index: self.pick_actual_color(i))
+            label.setMinimumHeight(62)
+            column.addWidget(label)
+            self.actual_labels.append(label)
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 100)
+            self.bind(slider.setAccessibleName, 'Brillo del foco {number}', number=index + 1)
+            slider.valueChanged.connect(lambda value, i=index: self.edit_actual(i, brightness=value))
+            column.addWidget(slider)
+            self.actual_sliders.append(slider)
+            actual_columns.addLayout(column, 1)
+        actual_layout.addLayout(actual_columns)
+        layout.addWidget(self.actual_panel)
         power_row = QHBoxLayout()
         power_row.addStretch()
         self.power = PowerButton()
@@ -244,12 +301,12 @@ class Window(QMainWindow):
         power_row.addWidget(self.power)
         power_row.addStretch()
         layout.addLayout(power_row)
-        layout.addStretch()
         self.status = QLabel(warning)
         self.status.setObjectName('muted')
         self.status.setWordWrap(True)
         self.status.setVisible(bool(warning))
         layout.addWidget(self.status)
+        layout.addStretch()
         self.build_settings_page()
         self.bind(self.settings_button.setToolTip, 'Configuración')
         self.bind(self.settings_button.setAccessibleName, 'Abrir configuración')
@@ -257,6 +314,22 @@ class Window(QMainWindow):
         if warning:
             self.bind(self.status.setText, warning)
         self.apply_language()
+        self.ensurePolished()
+        # Reserve the larger editor plus connection/error messages once, so
+        # changing screens or receiving Bridge data never grows the window.
+        status_visible = not self.status.isHidden()
+        self.status.show()
+        self.connection_notice.show()
+        sizes = []
+        for actual in (False, True):
+            self.scene_editor.setVisible(not actual)
+            self.actual_panel.setVisible(actual)
+            container.layout().invalidate()
+            sizes.append(container.sizeHint())
+        self.setFixedSize(max(980, *(size.width() for size in sizes)),
+                          max(size.height() for size in sizes) + 24)
+        self.status.setVisible(status_visible)
+        self.refresh()
 
     def tr_text(self, text, **values):
         return translate(self.state.language, text, **values)
@@ -301,7 +374,7 @@ class Window(QMainWindow):
         self.back_button = QPushButton()
         self.bind(self.back_button.setText, '← Volver')
         self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.back_button.clicked.connect(lambda: self.pages.setCurrentIndex(0))
+        self.back_button.clicked.connect(lambda: self.bridge_panel.return_to_controls())
         header.addWidget(self.back_button)
         header.addStretch()
         layout.addLayout(header)
@@ -397,25 +470,61 @@ class Window(QMainWindow):
         if self.status.text() == getattr(self, 'bridge_error_text', None):
             self.status.hide()
 
+    def receive_actual(self, lights, select=True):
+        self.actual = lights
+        if select:
+            self.actual_view = True
+        self.observed_power = [light['on'] for light in lights]
+        self.state.powered = any(self.observed_power)
+        self.refresh()
+
     def refresh(self):
-        real = self.state.bridge.mode == 'real'
-        self.badge.setText(self.tr_text('●  Focos reales' if real else '●  Simulación local'))
-        self.setWindowTitle(self.tr_text('PhiHue · Focos reales' if real else 'PhiHue · Simulador'))
+        real = self.state.bridge.ready and self.bridge_panel.connected
+        self.controls.setEnabled(real and not self.bridge_panel.busy)
+        self.disabled_effect.setEnabled(not real)
+        self.connection_notice.setVisible(not real)
+        self.connection_notice.setText(self.tr_text('Sin conexión lista. Abrí Configuración (⚙) para conectar el Bridge y elegir los focos.'))
+        self.badge.setText('' if real else self.tr_text('●  Sin conexión'))
+        self.badge.setVisible(not real)
+        self.setWindowTitle('PhiHue')
         s = self.state.current
+        self.scene_editor.setVisible(not self.actual_view)
+        self.actual_panel.setVisible(self.actual_view)
+        self.actual_button.scheme = Scheme(self.tr_text('Actual'),
+            [light['color'] for light in self.actual] if self.actual else ['#555555'] * 2)
+        self.actual_button.actual_lights = self.actual
+        self.actual_button.setChecked(self.actual_view)
+        self.actual_button.setAccessibleName(self.tr_text('Actual'))
+        self.actual_button.update()
+        for i, label in enumerate(self.actual_labels):
+            if self.actual:
+                light = self.actual[i]
+                self.actual_sliders[i].blockSignals(True)
+                self.actual_sliders[i].setValue(round(light['brightness']))
+                self.actual_sliders[i].blockSignals(False)
+                color = display_color(light['color'], light['brightness'], light['on'])
+                ink = '#10141d' if color.lightnessF() > .55 else '#ffffff'
+                label.setStyleSheet(f'background: {color.name()}; color: {ink}; border-radius: 12px; padding: 12px;')
+                label.setText(self.tr_text('Foco {number}', number=i + 1) + '  ·  ' +
+                    self.tr_text('Encendido' if light['on'] else 'Apagado') +
+                    f"  ·  {light['brightness']:.0f}%  ·  ≈ {light['color'].upper()}")
+            else:
+                label.setText(self.tr_text('Esperando lectura del Bridge…'))
         for i, button in enumerate(self.buttons):
             button.scheme = self.state.schemes[i]
             button.powered = self.state.powered
             button.setAccessibleName(button.scheme.name)
             button.setToolTip(button.scheme.name)
             button.update()
-            button.setChecked(i == self.state.selected)
+            button.setChecked(not self.actual_view and i == self.state.selected)
         if not self.name.hasFocus():
             self.name.setText(s.name)
         self.brightness.blockSignals(True)
         self.brightness.setValue(s.brightness)
         self.brightness.blockSignals(False)
         for i, button in enumerate(self.color_buttons):
-            c = display_color(s.colors[i], s.brightness, self.state.powered)
+            observed = getattr(self, 'observed_power', None)
+            c = display_color(s.colors[i], s.brightness, observed[i] if observed else self.state.powered)
             ink = '#10141d' if c.lightnessF() > 0.55 else '#ffffff'
             button.setText(self.tr_text('Foco {number}', number=i + 1) + f'    ·    {s.colors[i].upper()}    ↗')
             button.setStyleSheet(f'background: {c.name()}; color: {ink};')
@@ -426,6 +535,8 @@ class Window(QMainWindow):
         self.power.setToolTip(self.tr_text('Apagar' if self.state.powered else 'Encender'))
 
     def changed(self, control=True):
+        if control:
+            self.observed_power = None
         self.refresh()
         try:
             self.state.save(self.path)
@@ -437,6 +548,7 @@ class Window(QMainWindow):
             self.bridge_panel.schedule()
 
     def select(self, index):
+        self.actual_view = False
         self.state.selected = index
         self.changed()
 
@@ -449,6 +561,26 @@ class Window(QMainWindow):
     def copy_color(self, source):
         self.state.current.set_color(1 - source, self.state.current.colors[source])
         self.changed()
+
+    def edit_actual(self, index, **values):
+        if not self.actual or not self.actual_view:
+            return
+        self.actual[index].update(values)
+        if values.get('color') == '#000000':
+            self.actual[index]['on'] = False
+            self.state.powered = any(light['on'] for light in self.actual)
+        self.refresh()
+        self.bridge_panel.schedule_actual(index, values)
+
+    def pick_actual_color(self, index):
+        if not self.actual:
+            return
+        dialog = QColorDialog(QColor(self.actual[index]['color']), self)
+        dialog.setWindowTitle(self.tr_text('Color del foco {number}', number=index + 1))
+        dialog.setOption(QColorDialog.ColorDialogOption.NoButtons)
+        dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        dialog.currentColorChanged.connect(lambda color: self.edit_actual(index, color=color.name()))
+        dialog.exec()
 
     def pick_color(self, index):
         dialog = QColorDialog(QColor(self.state.current.colors[index]), self)
@@ -466,6 +598,10 @@ class Window(QMainWindow):
         self.changed()
 
     def toggle_power(self):
+        if self.actual_view:
+            self.bridge_panel.toggle_actual_power()
+            self.refresh()
+            return
         self.state.powered = not self.state.powered
         self.changed()
 

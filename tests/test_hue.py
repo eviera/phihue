@@ -99,6 +99,28 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(BridgeSettings.from_dict({'selected': None}).mode, 'simulation')
 
 
+    def test_partial_communication_error_is_actionable(self):
+        conn = self.connection({'data': [], 'errors': [{'error_code': 'communication_error'}]}, 207)
+        with patch('phihue.hue.http.client.HTTPSConnection', return_value=conn):
+            with self.assertRaisesRegex(HueError, 'un foco no responde'):
+                HueClient('192.168.1.20', 'key', PIN).request('PUT', '/clip/v2/resource/light/' + IDS[0], {'on': {'on': False}})
+
+
+    def test_actual_reads_independent_color_brightness_and_power(self):
+        client = HueClient('192.168.1.20', 'key', PIN)
+        data = [{'id': IDS[0], 'on': {'on': True}, 'dimming': {'brightness': 21}, 'color': {'xy': {'x': .7, 'y': .299}}},
+                {'id': IDS[1], 'on': {'on': False}, 'dimming': {'brightness': 88}, 'color': {'xy': {'x': .15, 'y': .06}}}]
+        with patch.object(client, 'request', return_value=data) as request:
+            snapshot = client.light_states(IDS)
+            self.assertEqual([light['brightness'] for light in snapshot], [21, 88])
+            self.assertEqual([light['on'] for light in snapshot], [True, False])
+            self.assertNotEqual(snapshot[0]['color'], snapshot[1]['color'])
+            request.assert_called_once_with('GET', '/clip/v2/resource/light')
+        with patch.object(client, 'request') as request:
+            client.set_power(IDS, False)
+            self.assertTrue(all(call.args[2] == {'on': {'on': False}} for call in request.call_args_list))
+
+
 class BridgeUITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -120,7 +142,7 @@ class BridgeUITests(unittest.TestCase):
         self.assertFalse(self.panel.busy)
 
     def test_pair_select_enable_and_apply_in_background(self):
-        with patch.object(HueClient, 'pair', return_value=('key', PIN)), patch.object(HueClient, 'lights', return_value=LIGHTS), patch.object(HueClient, 'apply') as apply:
+        with patch.object(HueClient, 'pair', return_value=('key', PIN)), patch.object(HueClient, 'lights', return_value=LIGHTS), patch.object(HueClient, 'apply') as apply, patch.object(HueClient, 'light_states', return_value=[{'on': True, 'brightness': 70, 'color': '#ff0000'}] * 2):
             self.panel.address.setText('192.168.1.20')
             self.panel.pair_button.click()
             self.wait_idle()
@@ -130,14 +152,16 @@ class BridgeUITests(unittest.TestCase):
             self.assertEqual(self.window.state.bridge.selected, [IDS[0], ''])
             self.panel.selectors[1].setCurrentIndex(2)
             self.assertTrue(self.window.state.bridge.ready)
+            self.assertTrue(self.window.controls.isEnabled())
+            self.assertTrue(self.window.settings_button.isEnabled())
             apply.assert_not_called()
-            self.panel.mode.setCurrentIndex(1)
+            self.panel.schedule()
             self.panel.timer.stop()
             self.panel.flush()
             self.wait_idle()
             self.assertEqual(apply.call_args.args[0], IDS)
             self.assertEqual(State.load(self.path).bridge.mode, 'real')
-            self.assertIn('Focos reales', self.window.badge.text())
+            self.assertTrue(self.window.badge.isHidden())
             self.window.adjust_brightness(10)
             self.window.adjust_brightness(30)
             self.panel.timer.stop()
@@ -146,19 +170,19 @@ class BridgeUITests(unittest.TestCase):
             self.assertEqual(apply.call_args.args[2], 30)
             self.assertEqual(apply.call_count, 2)
             self.window.adjust_brightness(50)
-            self.panel.mode.setCurrentIndex(0)
+            self.panel.connected = False
             self.panel.flush()
             self.assertEqual(apply.call_count, 2)
 
     def test_offline_error_and_no_real_mode_without_pairing(self):
-        self.panel.mode.setCurrentIndex(1)
+        self.assertFalse(self.window.controls.isEnabled())
         self.assertEqual(self.window.state.bridge.mode, 'simulation')
         with patch('phihue.bridge_panel.discover', side_effect=HueError('No se pudo buscar el Bridge. Podés ingresar su IP manualmente.')):
             self.panel.search.click()
             self.wait_idle()
         self.assertIn('No se pudo buscar', self.panel.status.text())
-        self.assertTrue(self.panel.pair_button.isEnabled())
-        with patch.object(HueClient, 'apply') as apply:
+        self.assertFalse(self.panel.pair_button.isEnabled())
+        with patch.object(HueClient, 'apply') as apply, patch.object(HueClient, 'light_states', return_value=[{'on': True, 'brightness': 70, 'color': '#ff0000'}] * 2):
             self.window.adjust_brightness(40)
             self.panel.flush()
             apply.assert_not_called()
@@ -169,13 +193,14 @@ class BridgeUITests(unittest.TestCase):
         with patch.object(HueClient, 'request') as request:
             other = Window(self.path)
             QTest.qWait(20)
-            request.assert_not_called()
+            self.assertTrue(all(call.args[0] == 'GET' for call in request.call_args_list))
             other.close()
             self.app.removeTranslator(other.qt_translator)
 
     def test_control_failure_keeps_configuration_and_can_retry(self):
         self.window.state.bridge = BridgeSettings('192.168.1.20', 'key', PIN, LIGHTS, IDS, 'real')
         self.window.state.save(self.path)
+        self.panel.connected = True
         self.panel.retranslate()
         with patch.object(HueClient, 'apply', side_effect=HueError('No se pudo contactar al Bridge. Revisá que estés en la misma red.')):
             self.panel.schedule()
@@ -183,9 +208,12 @@ class BridgeUITests(unittest.TestCase):
             self.panel.flush()
             self.wait_idle()
         self.assertIn('No se pudo contactar', self.window.status.text())
+        self.assertFalse(self.window.controls.isEnabled())
+        self.assertTrue(self.window.settings_button.isEnabled())
         self.assertEqual(State.load(self.path).bridge.selected, IDS)
-        with patch.object(HueClient, 'apply') as apply:
-            self.panel.retry.click()
+        with patch.object(HueClient, 'apply') as apply, patch.object(HueClient, 'light_states', return_value=[{'on': True, 'brightness': 70, 'color': '#ff0000'}] * 2):
+            self.panel.connected = True
+            self.panel.schedule()
             self.panel.timer.stop()
             self.panel.flush()
             self.wait_idle()
@@ -214,6 +242,8 @@ class BridgeUITests(unittest.TestCase):
         self.window.state.current.name = 'Custom'
         self.window.state.save(self.path)
         self.window.apply_language()
+        self.panel.connected = True
+        self.window.refresh()
         self.panel.schedule()
 
     def dialog_choice(self, role):
@@ -239,7 +269,7 @@ class BridgeUITests(unittest.TestCase):
         self.assertFalse(self.panel.timer.isActive())
         self.assertEqual(self.panel.address.text(), '')
         self.assertFalse(self.panel.disconnect_button.isEnabled())
-        self.assertIn('simulation', self.window.badge.text())
+        self.assertIn('Not connected', self.window.badge.text())
 
     def test_unpair_cancel_and_save_failure_keep_connection(self):
         self.prepare_unpair()
@@ -264,3 +294,146 @@ class BridgeUITests(unittest.TestCase):
             self.panel.disconnect_bridge()
             dialog.assert_not_called()
         self.panel.timer.stop()
+
+    def test_accept_returns_after_save_and_light_error_keeps_controls(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        self.window.pages.setCurrentIndex(1)
+        self.panel.retranslate()
+        with patch.object(HueClient, 'light_states', return_value=[{'on': True, 'brightness': 70, 'color': '#ff0000'}] * 2):
+            self.panel.accept_button.click()
+            self.wait_idle()
+        self.assertEqual(self.window.pages.currentIndex(), 0)
+        self.assertEqual(State.load(self.path).bridge.selected, IDS)
+        self.assertIn('Settings saved', self.window.status.text())
+        message = 'El Bridge está conectado, pero un foco no responde. Revisá su alimentación y conexión en la app Hue; luego reintentá el cambio.'
+        self.panel._controlling = True
+        self.panel.finished(None, message)
+        self.assertTrue(self.panel.connected)
+        self.assertTrue(self.window.controls.isEnabled())
+
+    def test_return_reads_power_without_writing_to_lights(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        for states in ([True, True], [False, False], [True, False]):
+            self.window.pages.setCurrentIndex(1)
+            self.window.state.powered = not any(states)
+            with patch.object(HueClient, 'light_states', return_value=[{'on': on, 'brightness': 70, 'color': '#ff0000'} for on in states]), patch.object(HueClient, 'apply') as apply:
+                self.window.back_button.click()
+                self.wait_idle()
+                apply.assert_not_called()
+            self.assertEqual(self.window.pages.currentIndex(), 0)
+            self.assertEqual(self.window.power.isChecked(), any(states))
+            self.assertEqual(self.window.observed_power, states)
+
+    def test_return_failure_stays_in_settings(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        self.window.pages.setCurrentIndex(1)
+        with patch.object(HueClient, 'light_states', side_effect=HueError('No se pudo contactar al Bridge. Revisá que estés en la misma red.')):
+            self.window.back_button.click()
+            self.wait_idle()
+        self.assertEqual(self.window.pages.currentIndex(), 1)
+        self.assertFalse(self.window.controls.isEnabled())
+
+    def test_startup_reads_actual_power_before_enabling_controls(self):
+        for states in ([True, True], [False, False], [True, False]):
+            state = State(bridge=BridgeSettings('192.168.1.20', 'key', PIN, LIGHTS, IDS, 'real'))
+            state.powered = not any(states)
+            state.save(self.path)
+            with patch.object(HueClient, 'lights', return_value=LIGHTS), patch.object(HueClient, 'light_states', return_value=[{'on': on, 'brightness': 70, 'color': '#ff0000'} for on in states]) as read, patch.object(HueClient, 'apply') as apply:
+                other = Window(self.path)
+                self.assertFalse(other.controls.isEnabled())
+                until = time.monotonic() + 3
+                while not other.controls.isEnabled() and time.monotonic() < until:
+                    QTest.qWait(10)
+                self.assertTrue(other.controls.isEnabled())
+                self.assertEqual(other.power.isChecked(), any(states))
+                self.assertEqual(other.observed_power, states)
+                read.assert_called_once_with(IDS)
+                apply.assert_not_called()
+                other.close()
+                self.app.removeTranslator(other.qt_translator)
+
+    def test_actual_keeps_scenes_and_displays_individual_values(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        scenes = deepcopy(self.window.state.schemes)
+        snapshot = [{'on': True, 'brightness': 23, 'color': '#ff0000'},
+                    {'on': False, 'brightness': 87, 'color': '#0011ff'}]
+        with patch.object(HueClient, 'light_states', return_value=snapshot), patch.object(HueClient, 'apply') as apply:
+            self.window.actual_button.click()
+            self.wait_idle()
+            apply.assert_not_called()
+        self.assertTrue(self.window.actual_view)
+        self.assertEqual(self.window.state.schemes, scenes)
+        self.assertIn('23%', self.window.actual_labels[0].text())
+        self.assertIn('87%', self.window.actual_labels[1].text())
+        self.assertIn('Off', self.window.actual_labels[1].text())
+        with patch.object(self.panel, 'schedule') as schedule:
+            self.window.select(2)
+            self.assertFalse(self.window.actual_view)
+            schedule.assert_called_once()
+        self.assertEqual(self.window.state.schemes, scenes)
+
+    def test_actual_power_does_not_apply_scene_colors_or_brightness(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        snapshot = [{'on': True, 'brightness': 23, 'color': '#ff0000'},
+                    {'on': False, 'brightness': 87, 'color': '#0011ff'}]
+        scenes = deepcopy(self.window.state.schemes)
+        self.window.receive_actual(snapshot)
+        off = [dict(light, on=False) for light in snapshot]
+        with patch.object(HueClient, 'set_power') as power, patch.object(HueClient, 'light_states', return_value=off), patch.object(HueClient, 'apply') as apply:
+            self.window.toggle_power()
+            self.wait_idle()
+            power.assert_called_once_with(IDS, False)
+            apply.assert_not_called()
+        self.assertEqual(self.window.state.schemes, scenes)
+        self.assertEqual(self.window.actual, off)
+
+    def test_actual_edits_only_changed_fields_and_preserves_scenes(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        self.panel.pending = None
+        snapshot = [{'on': True, 'brightness': 23, 'color': '#ff0000'},
+                    {'on': True, 'brightness': 87, 'color': '#0011ff'}]
+        self.window.receive_actual(snapshot)
+        scenes = deepcopy(self.window.state.schemes)
+        with patch.object(HueClient, 'request', return_value=[]) as request:
+            self.window.edit_actual(0, color='#00ff00')
+            self.window.actual_sliders[1].setValue(40)
+            self.window.actual_sliders[1].setValue(65)
+            self.panel.timer.stop()
+            self.panel.flush()
+            self.wait_idle()
+        self.assertEqual(request.call_count, 2)
+        first, second = request.call_args_list
+        self.assertEqual(set(first.args[2]), {'color'})
+        self.assertTrue(first.args[1].endswith(IDS[0]))
+        self.assertEqual(second.args[2], {'dimming': {'brightness': 65.0}})
+        self.assertTrue(second.args[1].endswith(IDS[1]))
+        self.assertEqual(self.window.state.schemes, scenes)
+        self.assertEqual(State.load(self.path).schemes, scenes)
+        self.assertEqual(self.window.actual[0]['brightness'], 23)
+        self.assertEqual(self.window.actual[1]['color'], '#0011ff')
+
+    def test_scene_refreshes_actual_without_changing_selected_scene(self):
+        self.prepare_unpair()
+        self.panel.timer.stop()
+        snapshot = [{'on': True, 'brightness': 74.9, 'color': '#ffc18a'},
+                    {'on': True, 'brightness': 75, 'color': '#8abaff'}]
+        scenes = deepcopy(self.window.state.schemes)
+        with patch.object(HueClient, 'apply') as apply, patch.object(HueClient, 'light_states', return_value=snapshot) as read:
+            self.window.select(3)
+            self.panel.timer.stop()
+            self.panel.flush()
+            self.wait_idle()
+            apply.assert_called_once()
+            read.assert_called_once_with(IDS)
+        self.assertEqual(self.window.actual, snapshot)
+        self.assertFalse(self.window.actual_view)
+        self.assertEqual(self.window.state.selected, 3)
+        self.assertTrue(self.window.buttons[3].isChecked())
+        self.assertEqual(self.window.actual_button.scheme.colors, [light['color'] for light in snapshot])
+        self.assertEqual(self.window.state.schemes, scenes)

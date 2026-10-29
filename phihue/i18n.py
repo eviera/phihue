@@ -1,6 +1,40 @@
 """Interface translations. Scheme names remain user-owned data."""
 
 ENGLISH = {
+    'Editá las luces sin cambiar tus ambientes guardados. Pulsá Actual para consultar de nuevo el Bridge.': 'Edit your lights without changing saved scenes. Click Current to read the Bridge again.',
+    'Brillo del foco {number}': 'Light {number} brightness',
+    'Cambios aplicados a las luces.': 'Changes applied to the lights.',
+
+    'Actual': 'Current',
+    'Estado actual de tus luces': 'Current light status',
+    'Consultar el estado actual sin modificar las luces': 'Read current status without changing the lights',
+    'Lectura del Bridge. El color es aproximado. Pulsá Actual para actualizar; elegí un ambiente para aplicarlo.': 'Read from the Bridge. Color is approximate. Click Current to refresh; choose a scene to apply it.',
+    'Esperando lectura del Bridge…': 'Waiting for the Bridge…',
+    'Encendido': 'On',
+    'Apagado': 'Off',
+    'No se pudo consultar el estado de los dos focos. Actualizá los focos en Configuración.': 'Could not read both lights. Refresh lights in Settings.',
+
+    'No se pudo consultar el encendido de los dos focos. Actualizá los focos en Configuración.': 'Could not read power state for both lights. Refresh lights in Settings.',
+    'Un foco está encendido y el otro apagado. El botón apagará ambos.': 'One light is on and the other is off. The button will turn both off.',
+    'Configuración guardada. Estado de los focos actualizado.': 'Settings saved. Light status updated.',
+    'Estado de los focos actualizado.': 'Light status updated.',
+    'Aceptar y volver': 'Accept and return',
+    'Configuración guardada. Ya podés controlar tus focos.': 'Settings saved. You can now control your lights.',
+    'Focos guardados. Elegí Aceptar y volver para continuar.': 'Lights saved. Choose Accept and return to continue.',
+    'El Bridge está conectado, pero un foco no responde. Revisá su alimentación y conexión en la app Hue; luego reintentá el cambio.': 'The Bridge is connected, but a light is not responding. Check its power and connection in the Hue app, then retry the change.',
+
+    '1. Buscá el Bridge en tu red o ingresá su IP': '1. Find the Bridge on your network or enter its IP',
+    '2. Presioná el botón del Bridge y luego Vincular': '2. Press the Bridge button, then choose Pair',
+    '3. Elegí los dos focos que vas a controlar': '3. Choose the two lights to control',
+    'Completá los tres pasos para habilitar los controles.': 'Complete the three steps to enable controls.',
+    'No se encontró un Bridge. Revisá la red o ingresá su IP.': 'No Bridge found. Check your network or enter its IP.',
+    'Conexión lista. Volvé a la pantalla principal para controlar los focos.': 'Connection ready. Return to the main screen to control your lights.',
+    'Se borrará la conexión y los controles quedarán deshabilitados. Tus ambientes e idioma se conservan.': 'The connection will be removed and controls disabled. Your scenes and language are kept.',
+    'Bridge desvinculado. Conectalo para habilitar los controles.': 'Bridge unpaired. Connect it to enable controls.',
+    'Sin conexión lista. Abrí Configuración (⚙) para conectar el Bridge y elegir los focos.': 'Connection not ready. Open Settings (⚙) to connect the Bridge and choose your lights.',
+    '●  Sin conexión': '●  Not connected',
+    'PhiHue · Sin conexión': 'PhiHue · Not connected',
+
     'Desvincular Bridge': 'Unpair Bridge',
     '¿Querés desvincular el Bridge?': 'Unpair this Bridge?',
     'Se borrará la conexión guardada en esta app y volverás a simulación. Tus ambientes e idioma se conservan. No necesitás estar en casa.': 'This app will forget the saved connection and return to simulation. Your scenes and language are kept. You do not need to be home.',
