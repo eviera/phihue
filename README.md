@@ -18,7 +18,22 @@ python3 -m venv .venv
 
 En Windows: `py -m venv .venv`, `.venv\Scripts\python -m pip install -r requirements.txt` y `.venv\Scripts\python -m phihue`.
 
-## Uso
+## Aplicación para macOS (Apple Silicon)
+
+Abrí `dist/PhiHue.app` con doble clic o arrastrala a Aplicaciones. Incluye Python y sus dependencias; no necesita el entorno `.venv` para funcionar.
+
+La aplicación empaquetada guarda la configuración en `~/Library/Application Support/PhiHue/state.json`, fuera del `.app`, por lo que reemplazar la aplicación no borra los ajustes. La ejecución desde código sigue usando `data/state.json`. Para trasladar una configuración existente, copiá ese archivo a la ubicación anterior con la aplicación cerrada. El paquete nunca incluye claves del Bridge ni datos personales.
+
+Para reconstruir en un Mac Apple Silicon:
+
+```sh
+.venv/bin/python -m pip install -r requirements-build.txt
+PYINSTALLER_CONFIG_DIR=/tmp/phihue-pyinstaller .venv/bin/python -m PyInstaller --noconfirm PhiHue.spec
+```
+
+El icono está incluido en `packaging/PhiHue.icns`; se puede regenerar con `.venv/bin/python packaging/make_icon.py`. El paquete lleva firma ad hoc local, sin notarización de Apple.
+
+## Controles
 
 Cinco tarjetas seleccionan ambientes con dos colores independientes. Los botones `1 → 2` y `1 ← 2` copian el color una sola vez; no vinculan ediciones futuras.
 

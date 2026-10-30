@@ -2,7 +2,7 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 from PySide6.QtCore import Qt, QRectF, QTranslator, QLibraryInfo, QEvent, QTimer
-from PySide6.QtGui import QColor, QPainter, QLinearGradient, QFont, QPen
+from PySide6.QtGui import QColor, QPainter, QLinearGradient, QFont, QPen, QIcon
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QLineEdit, QSlider, QColorDialog, QFrame,
     QStackedWidget, QMessageBox, QComboBox, QScrollArea, QGraphicsColorizeEffect, QDialog, QDialogButtonBox)
@@ -11,6 +11,11 @@ from .i18n import translate
 from .bridge_panel import BridgePanel
 
 ROOT = Path(__file__).resolve().parent.parent
+
+def default_state_path():
+    if getattr(sys, 'frozen', False):
+        return Path.home() / 'Library' / 'Application Support' / 'PhiHue' / 'state.json'
+    return ROOT / 'data' / 'state.json'
 
 class SettingsButton(QPushButton):
     def __init__(self):
@@ -153,8 +158,9 @@ STYLE = """
 """
 
 class Window(QMainWindow):
-    def __init__(self, path=ROOT / 'data' / 'state.json'):
+    def __init__(self, path=None):
         super().__init__()
+        path = default_state_path() if path is None else path
         self.scene_drafts = {}
         self.actual = None
         self.actual_view = True
@@ -741,6 +747,8 @@ class Window(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationName('PhiHue')
+    app.setWindowIcon(QIcon(str(Path(__file__).parent / 'assets' / 'icon.png')))
     app.setStyle('Fusion')
     window = Window()
     window.show()
